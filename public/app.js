@@ -46,6 +46,20 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => t.classList.add('hidden'), 3500);
 }
 
+// ---------- Theme ----------
+function applyTheme(dark) {
+  if (dark) document.documentElement.dataset.theme = 'dark';
+  else delete document.documentElement.dataset.theme;
+  const btn = $('#theme-toggle');
+  btn.textContent = dark ? '☀ Light' : '☾ Dark';
+  btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  btn.setAttribute('aria-pressed', String(dark));
+  try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch { /* private mode */ }
+}
+$('#theme-toggle').addEventListener('click', () =>
+  applyTheme(document.documentElement.dataset.theme !== 'dark'));
+applyTheme(document.documentElement.dataset.theme === 'dark');
+
 // ---------- Modal ----------
 function openModal(html) {
   $('#modal').innerHTML = html;
