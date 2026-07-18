@@ -1,0 +1,15 @@
+services:
+  lawn-monitor:
+    build: .
+    container_name: lawn-monitor
+    restart: unless-stopped
+    ports:
+      # Change the left side to whatever host port you want to reverse-proxy
+      - "${LAWN_MONITOR_PORT:-3000}:3000"
+    volumes:
+      - lawn-data:/data
+    environment:
+      - TZ=${TZ:-Australia/Sydney}
+
+volumes:
+  lawn-data:

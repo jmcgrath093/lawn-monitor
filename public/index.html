@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lawn Monitor</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%8C%B1%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>🌱 Lawn Monitor</h1>
+      <nav id="nav">
+        <a href="#/dashboard" data-route="dashboard">Dashboard</a>
+        <a href="#/calendar" data-route="calendar">Calendar</a>
+        <a href="#/products" data-route="products">Products</a>
+        <a href="#/history" data-route="history">History</a>
+        <a href="#/zones" data-route="zones">Zones</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="view"></main>
+
+  <button id="fab" class="fab" title="Log application">＋ Log</button>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div id="modal" class="modal" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
