@@ -97,8 +97,8 @@ async function renderDashboard() {
   const oneOffs = d.items.filter(i => i.status === 'one_off');
   const ok = d.items.filter(i => i.status === 'ok');
 
-  const section = (title, items, emptyMsg) => `
-    <h3>${title}</h3>
+  const section = (title, cls, items, emptyMsg) => `
+    <h3 class="sec ${cls}"><span class="tick"></span>${title} <span class="count">${items.length}</span></h3>
     <div class="card">
       ${items.length ? items.map(schedItemHtml).join('') : `<div class="empty">${emptyMsg}</div>`}
     </div>`;
@@ -106,7 +106,7 @@ async function renderDashboard() {
   let lowStockHtml = '';
   if (d.lowStock.length) {
     lowStockHtml = `
-      <h3>⚠️ Low stock</h3>
+      <h3 class="sec sec-red"><span class="tick"></span>Low stock <span class="count">${d.lowStock.length}</span></h3>
       <div class="card">
         ${d.lowStock.map(p => `
           <div class="sched-item">
@@ -122,7 +122,7 @@ async function renderDashboard() {
   let notStartedHtml = '';
   if (d.notStarted.length) {
     notStartedHtml = `
-      <h3>Not yet started</h3>
+      <h3 class="sec"><span class="tick"></span>Not yet started <span class="count">${d.notStarted.length}</span></h3>
       <div class="card">
         ${d.notStarted.map(p => `
           <div class="sched-item">
@@ -136,11 +136,11 @@ async function renderDashboard() {
   view.innerHTML = `
     <h2>Dashboard</h2>
     ${lowStockHtml}
-    ${section('🔴 Overdue', overdue, 'Nothing overdue — nice work.')}
-    ${section('🟠 Due this week', dueSoon, 'Nothing due in the next 7 days.')}
-    ${section('🔵 Coming up (8–14 days)', upcoming, 'Nothing in the 2-week window.')}
-    ${oneOffs.length ? section('One-off / as-needed (last applied)', oneOffs, '') : ''}
-    ${ok.length ? section('On schedule (due later)', ok, '') : ''}
+    ${section('Overdue', 'sec-red', overdue, 'Nothing overdue — nice work.')}
+    ${section('Due this week', 'sec-amber', dueSoon, 'Nothing due in the next 7 days.')}
+    ${section('Coming up (8–14 days)', 'sec-blue', upcoming, 'Nothing in the 2-week window.')}
+    ${oneOffs.length ? section('One-off / as-needed (last applied)', '', oneOffs, '') : ''}
+    ${ok.length ? section('On schedule (due later)', 'sec-green', ok, '') : ''}
     ${notStartedHtml}
   `;
 }
@@ -167,7 +167,7 @@ async function renderCalendar() {
   for (const a of apps) {
     push(a.date_applied, {
       cls: 'applied',
-      label: `✔ ${a.product_name}`,
+      label: `✓ ${a.product_name}`,
       title: `${a.product_name} applied to ${a.zone_name} — ${fmtQty(a.actual_qty ?? a.calculated_qty)}${a.rate_unit}`
     });
   }
@@ -177,7 +177,7 @@ async function renderCalendar() {
     if (i.next_due >= monthStart && i.next_due <= monthEnd) {
       push(i.next_due, {
         cls: i.next_due < today ? 'overdue' : 'due',
-        label: `⏰ ${i.product_name}`,
+        label: `${i.next_due < today ? '!' : '○'} ${i.product_name}`,
         title: `${i.product_name} due for ${i.zone_name}`
       });
     }
@@ -206,9 +206,9 @@ async function renderCalendar() {
       </div>
       <div class="cal-grid">${cells}</div>
       <div class="cal-legend">
-        <span><span class="cal-event applied">✔ applied</span></span>
-        <span><span class="cal-event due">⏰ due</span></span>
-        <span><span class="cal-event overdue">⏰ overdue</span></span>
+        <span><span class="cal-event applied">✓ applied</span></span>
+        <span><span class="cal-event due">○ due</span></span>
+        <span><span class="cal-event overdue">! overdue</span></span>
       </div>
     </div>`;
 
@@ -273,8 +273,8 @@ async function renderProducts() {
         <option value="">All types</option>
         ${typeOptions}
       </select>
-      <label class="row-flex" style="font-weight:normal; width:auto;">
-        <input type="checkbox" id="pf-archived" style="width:auto;" ${productShowArchived ? 'checked' : ''}> Show archived
+      <label class="check">
+        <input type="checkbox" id="pf-archived" ${productShowArchived ? 'checked' : ''}> Show archived
       </label>
       <span class="spacer"></span>
       <button class="btn-sm" onclick="openTypesManager()">Manage types</button>
@@ -303,10 +303,10 @@ async function renderHistory() {
     const overridden = a.actual_qty != null;
     return `
       <tr>
-        <td>${fmtDate(a.date_applied)}</td>
+        <td class="data">${fmtDate(a.date_applied)}</td>
         <td>${esc(a.product_name)}${a.product_active ? '' : ' <span class="badge archived">Archived</span>'}</td>
         <td>${esc(a.zone_name)}</td>
-        <td>${fmtQty(qty)}${esc(a.rate_unit)}${overridden ? ` <span class="muted" title="Calculated: ${fmtQty(a.calculated_qty)}${esc(a.rate_unit)}">(manual)</span>` : ''}</td>
+        <td class="data">${fmtQty(qty)}${esc(a.rate_unit)}${overridden ? ` <span class="muted" title="Calculated: ${fmtQty(a.calculated_qty)}${esc(a.rate_unit)}">(manual)</span>` : ''}</td>
         <td>${esc(a.notes || '')}</td>
         <td style="white-space:nowrap;">
           <button class="btn-sm" onclick="openEditApplication(${a.id})">Edit</button>
@@ -353,7 +353,7 @@ async function renderZones() {
   const rows = zones.map(z => `
     <tr>
       <td>${esc(z.name)}${z.active ? '' : ' <span class="badge archived">Archived</span>'}</td>
-      <td>${fmtQty(z.area_m2)} m²</td>
+      <td class="data">${fmtQty(z.area_m2)} m²</td>
       <td style="white-space:nowrap;">
         <button class="btn-sm" onclick="openZoneForm(${z.id})">Edit</button>
         ${z.active
