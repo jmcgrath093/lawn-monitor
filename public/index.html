@@ -9,30 +9,44 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%8C%B1%3C/text%3E%3C/svg%3E">
 </head>
 <body>
-  <header>
-    <div class="header-inner">
-      <h1 class="wordmark">Lawn <span>Monitor</span></h1>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Lawn Monitor</span>
+      </div>
+      <button id="cta-log" class="cta"><span class="plus" aria-hidden="true">＋</span> Log<span class="cta-more"> application</span></button>
       <nav id="nav">
-        <a href="#/dashboard" data-route="dashboard">Dashboard</a>
-        <a href="#/calendar" data-route="calendar">Calendar</a>
-        <a href="#/products" data-route="products">Products</a>
-        <a href="#/history" data-route="history">History</a>
-        <a href="#/zones" data-route="zones">Zones</a>
+        <a href="#/dashboard" data-route="dashboard"><span class="nav-dot" aria-hidden="true"></span>Home</a>
+        <a href="#/calendar" data-route="calendar"><span class="nav-dot" aria-hidden="true"></span>Calendar</a>
+        <a href="#/products" data-route="products"><span class="nav-dot" aria-hidden="true"></span>Products</a>
+        <a href="#/history" data-route="history"><span class="nav-dot" aria-hidden="true"></span>History</a>
+        <a href="#/zones" data-route="zones"><span class="nav-dot" aria-hidden="true"></span>Zones</a>
       </nav>
-      <button id="theme-toggle" class="theme-toggle" aria-pressed="false" title="Switch to dark mode">☾ Dark</button>
+      <div class="side-foot">
+        <div class="today-label">Today</div>
+        <div class="today-date" id="today-date"></div>
+        <button id="theme-toggle" class="theme-toggle" aria-pressed="false" title="Switch to dark mode">☾ Dark</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="main-head">
+        <div>
+          <h1 id="screen-title"></h1>
+          <div id="screen-sub" class="screen-sub"></div>
+        </div>
+        <div id="head-actions" class="head-actions"></div>
+      </div>
+      <main id="view" class="lm-scroll"></main>
     </div>
-    <div class="stripe" aria-hidden="true"></div>
-  </header>
-
-  <main id="view"></main>
-
-  <button id="fab" class="fab" title="Log application">＋ Log</button>
-
-  <div id="modal-backdrop" class="modal-backdrop hidden">
-    <div id="modal" class="modal" role="dialog" aria-modal="true"></div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div id="modal" class="modal lm-scroll" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
 
   <script src="app.js"></script>
 </body>

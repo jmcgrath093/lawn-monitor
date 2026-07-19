@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS applications (
   date_applied TEXT NOT NULL,       -- YYYY-MM-DD
   calculated_qty REAL NOT NULL,     -- in the product's rate_unit
   actual_qty REAL,                  -- manual override, same unit; NULL = used calculated
+  deducted_qty REAL,                -- stock actually removed, in stock_unit; NULL = legacy row
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -55,6 +56,14 @@ CREATE TABLE IF NOT EXISTS applications (
 CREATE INDEX IF NOT EXISTS idx_applications_product ON applications(product_id, date_applied);
 CREATE INDEX IF NOT EXISTS idx_applications_zone ON applications(zone_id, date_applied);
 `);
+
+// ---- Migrations for databases created before deducted_qty existed ----
+const appCols = db.prepare('PRAGMA table_info(applications)').all().map(c => c.name);
+if (!appCols.includes('deducted_qty')) {
+  db.exec('ALTER TABLE applications ADD COLUMN deducted_qty REAL');
+}
+// Stock can no longer go negative; repair rows left by the old deduction logic
+db.prepare('UPDATE products SET stock_qty = 0 WHERE stock_qty < 0').run();
 
 // ---- Seed on first run only (empty product_types table) ----
 const typeCount = db.prepare('SELECT COUNT(*) AS n FROM product_types').get().n;

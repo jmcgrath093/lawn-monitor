@@ -19,6 +19,26 @@ function usedQty(app) {
   return app.actual_qty != null ? app.actual_qty : app.calculated_qty;
 }
 
+// Amount of one package in stock units, parsed from the free-text package_size ("2.5L bottle").
+function packageQty(product) {
+  if (!product.package_size) return null;
+  const m = String(product.package_size).match(/([\d.]+)\s*(mL|L|g|kg)\b/i);
+  if (!m) return null;
+  const unit = { ml: 'mL', l: 'L', g: 'g', kg: 'kg' }[m[2].toLowerCase()];
+  const qty = Number(m[1]);
+  if (!qty || !unit) return null;
+  if (UNIT_FACTORS[unit][0] !== UNIT_FACTORS[product.stock_unit][0]) return null;
+  return convertQty(qty, unit, product.stock_unit);
+}
+
+// Low-stock threshold in stock units: an explicit threshold wins;
+// otherwise fall back to 10% of a parseable package size.
+function effectiveThreshold(product) {
+  if (product.low_stock_threshold != null) return product.low_stock_threshold;
+  const pkg = packageQty(product);
+  return pkg != null ? pkg * 0.1 : null;
+}
+
 function httpError(res, code, msg) {
   return res.status(code).json({ error: msg });
 }
@@ -225,10 +245,25 @@ function validateApplication(body, res) {
   };
 }
 
-function adjustStock(productId, deltaInRateUnit) {
+// Deduct stock for an application. Stock floors at 0 — you can't use what you
+// don't have — and the amount actually removed (in stock_unit) is returned so
+// it can be recorded on the application and restored exactly on edit/delete.
+function deductStock(productId, qtyInRateUnit) {
   const p = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
-  const delta = convertQty(deltaInRateUnit, p.rate_unit, p.stock_unit);
-  db.prepare('UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?').run(delta, productId);
+  const want = Math.max(0, convertQty(qtyInRateUnit, p.rate_unit, p.stock_unit));
+  const deducted = Math.min(want, Math.max(0, p.stock_qty));
+  db.prepare('UPDATE products SET stock_qty = stock_qty - ? WHERE id = ?').run(deducted, productId);
+  return { deducted, shortfall: want - deducted, stock_unit: p.stock_unit };
+}
+
+function restoreStock(app) {
+  // Legacy rows (before deducted_qty was recorded) restore the full converted amount
+  let amount = app.deducted_qty;
+  if (amount == null) {
+    const p = db.prepare('SELECT * FROM products WHERE id = ?').get(app.product_id);
+    amount = convertQty(usedQty(app), p.rate_unit, p.stock_unit);
+  }
+  db.prepare('UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?').run(amount, app.product_id);
 }
 
 router.post('/applications', (req, res) => {
@@ -239,11 +274,13 @@ router.post('/applications', (req, res) => {
       INSERT INTO applications (product_id, zone_id, date_applied, calculated_qty, actual_qty, notes)
       VALUES (@product_id, @zone_id, @date_applied, @calculated_qty, @actual_qty, @notes)
     `).run(v.row);
-    adjustStock(v.row.product_id, -usedQty(v.row));
-    return info.lastInsertRowid;
+    const d = deductStock(v.row.product_id, usedQty(v.row));
+    db.prepare('UPDATE applications SET deducted_qty = ? WHERE id = ?').run(d.deducted, info.lastInsertRowid);
+    return { id: info.lastInsertRowid, ...d };
   });
-  const id = create();
-  res.status(201).json(db.prepare('SELECT * FROM applications WHERE id = ?').get(id));
+  const r = create();
+  const app = db.prepare('SELECT * FROM applications WHERE id = ?').get(r.id);
+  res.status(201).json({ ...app, stock_shortfall: r.shortfall > 1e-9 ? r.shortfall : 0, stock_unit: r.stock_unit });
 });
 
 router.put('/applications/:id', (req, res) => {
@@ -253,14 +290,14 @@ router.put('/applications/:id', (req, res) => {
   if (!v) return;
   const update = db.transaction(() => {
     // Return the old deduction to the old product's stock, then deduct the new amount
-    adjustStock(existing.product_id, usedQty(existing));
+    restoreStock(existing);
+    const d = deductStock(v.row.product_id, usedQty(v.row));
     db.prepare(`
       UPDATE applications SET product_id = @product_id, zone_id = @zone_id,
         date_applied = @date_applied, calculated_qty = @calculated_qty,
-        actual_qty = @actual_qty, notes = @notes
+        actual_qty = @actual_qty, deducted_qty = @deducted_qty, notes = @notes
       WHERE id = @id
-    `).run({ ...v.row, id: existing.id });
-    adjustStock(v.row.product_id, -usedQty(v.row));
+    `).run({ ...v.row, deducted_qty: d.deducted, id: existing.id });
   });
   update();
   res.json(db.prepare('SELECT * FROM applications WHERE id = ?').get(existing.id));
@@ -270,7 +307,7 @@ router.delete('/applications/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM applications WHERE id = ?').get(req.params.id);
   if (!existing) return httpError(res, 404, 'Application not found');
   const remove = db.transaction(() => {
-    adjustStock(existing.product_id, usedQty(existing));
+    restoreStock(existing);
     db.prepare('DELETE FROM applications WHERE id = ?').run(existing.id);
   });
   remove();
@@ -293,12 +330,20 @@ router.get('/schedule', (req, res) => {
 
 router.get('/dashboard', (req, res) => {
   const schedule = buildSchedule();
+  // Low stock: explicit threshold, or 10% of package size when no threshold is set.
+  // Out-of-stock products are always flagged once they've actually been used
+  // (never-stocked products the user hasn't touched shouldn't nag).
   const lowStock = db.prepare(`
-    SELECT id, name, stock_qty, stock_unit, low_stock_threshold
-    FROM products
-    WHERE active = 1 AND low_stock_threshold IS NOT NULL AND stock_qty <= low_stock_threshold
-    ORDER BY name COLLATE NOCASE
-  `).all();
+    SELECT p.*, EXISTS(SELECT 1 FROM applications a WHERE a.product_id = p.id) AS has_apps
+    FROM products p WHERE p.active = 1 ORDER BY p.name COLLATE NOCASE
+  `).all()
+    .map(p => ({ p, thr: effectiveThreshold(p) }))
+    .filter(({ p, thr }) => (p.stock_qty <= 0 && p.has_apps) || (thr != null && p.stock_qty <= thr))
+    .map(({ p, thr }) => ({
+      id: p.id, name: p.name, stock_qty: p.stock_qty, stock_unit: p.stock_unit,
+      low_stock_threshold: p.low_stock_threshold, effective_threshold: thr,
+      out_of_stock: p.stock_qty <= 0
+    }));
   res.json({ ...schedule, lowStock });
 });
 
