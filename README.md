@@ -9,6 +9,7 @@ Self-hosted lawn care product tracker. Single user, single container, SQLite —
 - **Application logging** — pick product + zone + date; quantity is auto-calculated from `rate × (zone area ÷ rate area)`, deducted from stock, and manually overridable. Editing/deleting a log entry adjusts stock back correctly.
 - **Auto-scheduling** — next due = *actual* last application date + interval (never a calendar grid). Overdue items show how many days late. One-off/seasonal products (blank interval) are never auto-scheduled. Unapplied products show as "not yet started".
 - **Views** — dashboard (overdue / due this week / next 2 weeks / low stock), monthly calendar (past applications + upcoming/overdue due dates), filterable product library, filterable history log.
+- **Preset plans** — apply a pre-made seasonal program (currently "Couch / Bermuda — warm season", distilled from the Lawn Addicts and Lawn Pride couch programs) from the Calendar. The wizard maps each plan *concept* (kelp, soil wetter, pre-emergent…) to your own products by type, then schedules dated planned entries for the next 12 months. Planned entries show as rings on the calendar (click a day to log/skip/edit/delete them), appear in a "This month's plan" dashboard panel, and convert to a logged application with one click — everything stays individually editable.
 - Mobile-friendly — usable from a phone standing on the lawn.
 
 ### Design decision: scheduling is per product **and zone**
@@ -60,9 +61,12 @@ All stock quantities start at 0 — use **Restock** or **Edit** on each product 
 - `product_types` — editable list of type tags
 - `zones` — name, area_m2, active
 - `applications` — product_id, zone_id, date_applied, calculated_qty, actual_qty (NULL = used calculated), notes
+- `planned_applications` — zone_id, product_id (NULL = reminder without a product), concept, planned_date, source (`preset:<plan>` or `manual`), optional, status (planned/done/skipped), application_id (link to the log entry that completed it), notes
+
+A product that has an `interval_days` **and** appears in a plan shows both a derived due-dot and a planned ring on the calendar — that's intentional (the two systems are independent). If you run a product purely off the plan, clear its interval.
 
 Stock deduction converts between mL↔L and g↔kg automatically when a product's rate unit and stock unit differ.
 
 ## API
 
-REST under `/api`: `types`, `products` (+ `/archive`, `/unarchive`, `/restock`), `zones`, `applications` (with `product_id`/`zone_id`/`from`/`to` filters), `calc` (quantity preview), `schedule`, `dashboard`. All JSON.
+REST under `/api`: `types`, `products` (+ `/archive`, `/unarchive`, `/restock`), `zones`, `applications` (with `product_id`/`zone_id`/`from`/`to` filters), `calc` (quantity preview), `schedule`, `dashboard`, `plans` (+ `/:id/apply` with dry-run/replace, `/:id/clear`), `planned` (CRUD, with `from`/`to`/`zone_id`/`status` filters). All JSON.

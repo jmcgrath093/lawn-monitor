@@ -136,7 +136,13 @@ function statusBadge(item) {
 const view = $('#view');
 
 async function renderDashboard() {
-  const d = await api('/dashboard');
+  const now = new Date();
+  const mFirst = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const mLast = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
+  const [d, monthPlan] = await Promise.all([
+    api('/dashboard'),
+    api(`/planned?from=${mFirst}&to=${mLast}`)
+  ]);
   const overdue = d.items.filter(i => i.status === 'overdue');
   const dueSoon = d.items.filter(i => i.status === 'due_soon');
   const upcoming = d.items.filter(i => i.status === 'upcoming');
@@ -171,6 +177,16 @@ async function renderDashboard() {
       </div>
       <button class="row-act btn-ghost" onclick="openRestockForm(${p.id})">Restock</button>
     </div>`;
+  const today = todayStr();
+  const planRow = e => `
+    <div class="row-card">
+      <div class="row-main">
+        <div class="row-name">${esc(e.concept)}</div>
+        <div class="row-sub">${fmtShort(e.planned_date)} · ${esc(e.zone_name)}${e.product_id ? ' · ' + esc(e.product_name) : ' · no product assigned'}</div>
+        ${e.planned_date < today ? '<span class="badge due-soon">Missed</span>' : (e.optional ? '<span class="badge neutral">Optional</span>' : '')}
+      </div>
+      <button class="row-act btn-primary" onclick="logPlanned(${e.id})">Log</button>
+    </div>`;
   const nsRow = p => `
     <div class="row-card">
       <div class="row-main">
@@ -192,6 +208,7 @@ async function renderDashboard() {
   push('Low stock', 'dot-red', d.lowStock.map(lowRow));
   push('Overdue', 'dot-red', overdue.map(schedRow));
   push('Due this week', 'dot-amber', dueSoon.map(schedRow));
+  push("This month's plan", 'dot-blue', monthPlan.map(planRow));
   push('Coming up', 'dot-blue', upcoming.map(schedRow));
   push('One-off products', 'dot-gray', oneOffs.map(schedRow));
   push('On track', 'dot-green', ok.map(schedRow));
@@ -204,6 +221,7 @@ async function renderDashboard() {
 
 // ---------- Calendar ----------
 let calYear, calMonth; // month is 1-12
+let presetSources = []; // 'preset:<id>' sources with upcoming entries, set by renderCalendar
 
 async function renderCalendar() {
   const now = new Date();
@@ -213,14 +231,20 @@ async function renderCalendar() {
   const lastDay = new Date(calYear, calMonth, 0).getDate();
   const monthEnd = `${calYear}-${String(calMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-  const [apps, schedule] = await Promise.all([
+  const [apps, schedule, planned] = await Promise.all([
     api(`/applications?from=${monthStart}&to=${monthEnd}`),
-    api('/schedule')
+    api('/schedule'),
+    api('/planned') // all upcoming/outstanding planned entries (active zones)
   ]);
 
-  setHead('Calendar', 'Applications & due dates');
-
   const today = todayStr();
+  presetSources = [...new Set(planned
+    .filter(pl => pl.source.startsWith('preset:') && pl.planned_date >= today)
+    .map(pl => pl.source))];
+
+  setHead('Calendar', 'Applications, due dates & planned work', `
+    ${presetSources.length ? '<button class="btn-head" onclick="clearPresetPlan()">Clear preset entries</button>' : ''}
+    <button class="btn-head btn-head-primary" onclick="openApplyPlanWizard()">Apply a plan</button>`);
   const appliedMap = {}; // date -> [labels]
   for (const a of apps) {
     (appliedMap[a.date_applied] = appliedMap[a.date_applied] || [])
@@ -237,21 +261,31 @@ async function renderCalendar() {
     if (!cur || prio < cur.prio) dueMap[i.next_due] = { cls, prio, labels: cur ? cur.labels : [] };
     dueMap[i.next_due].labels.push(`${i.product_name} due (${i.zone_name})`);
   }
+  const plannedMap = {}; // date -> [planned rows]
+  for (const pl of planned) {
+    (plannedMap[pl.planned_date] = plannedMap[pl.planned_date] || []).push(pl);
+  }
 
   const cell = (y, m, day, muted) => {
     const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const applied = !muted && appliedMap[dateStr];
     const due = !muted && dueMap[dateStr];
+    const plans = !muted && plannedMap[dateStr];
     const isToday = dateStr === today;
     const classes = ['cal-cell'];
     if (muted) classes.push('other-month');
     if (isToday) classes.push('today');
     else if (applied) classes.push('applied');
     if (due && !isToday) classes.push(due.cls);
-    const titleTxt = [...(applied || []).map(l => '✓ ' + l), ...((due && due.labels) || [])].join('\n');
-    return `<div class="${classes.join(' ')}"${titleTxt ? ` title="${esc(titleTxt)}"` : ''}>
+    if (plans) classes.push('has-plan');
+    const titleTxt = [
+      ...(applied || []).map(l => '✓ ' + l),
+      ...((due && due.labels) || []),
+      ...(plans || []).map(p => `◌ ${p.concept} (${p.zone_name})`)
+    ].join('\n');
+    return `<div class="${classes.join(' ')}"${titleTxt ? ` title="${esc(titleTxt)}"` : ''}${plans ? ` onclick="openDayPlan('${dateStr}')"` : ''}>
       <span class="cal-num">${day}</span>
-      <span class="cal-marks">${applied ? '<span class="mark-check">✓</span>' : ''}${due ? `<span class="mark-dot ${due.cls}"></span>` : ''}</span>
+      <span class="cal-marks">${applied ? '<span class="mark-check">✓</span>' : ''}${due ? `<span class="mark-dot ${due.cls}"></span>` : ''}${plans ? `<span class="mark-plan${plans.every(p => p.optional) ? ' faint' : ''}"></span>` : ''}</span>
     </div>`;
   };
 
@@ -287,6 +321,7 @@ async function renderCalendar() {
         <div class="legend-row"><span class="legend-mark mark-check">✓</span>Applied on this day</div>
         <div class="legend-row"><span class="legend-mark"><span class="mark-dot due-red" style="display:inline-block"></span></span>Overdue due-date</div>
         <div class="legend-row"><span class="legend-mark"><span class="mark-dot due-amber" style="display:inline-block"></span></span>Due soon / upcoming</div>
+        <div class="legend-row"><span class="legend-mark"><span class="mark-plan" style="display:inline-block"></span></span>Planned application (click day)</div>
         <div class="legend-row"><span class="legend-mark"><span class="mark-dot due-green" style="display:inline-block"></span></span>On-track due-date</div>
       </aside>
     </div>`;
@@ -712,8 +747,246 @@ async function deleteZone(id) {
   catch (err) { toast(err.message, true); }
 }
 
+// ---------- Planned applications & preset plans ----------
+async function getPlanned(id) {
+  const rows = await api('/planned?status=all&all=1');
+  return rows.find(r => r.id === id);
+}
+
+async function logPlanned(id) {
+  const e = await getPlanned(id);
+  if (!e) return toast('Planned entry not found', true);
+  openLogForm(e.product_id, e.zone_id, null, e);
+}
+
+async function skipPlanned(id) {
+  try {
+    await api(`/planned/${id}`, { method: 'PUT', body: { status: 'skipped' } });
+    toast('Planned entry skipped');
+    closeModal();
+    route();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function deletePlanned(id) {
+  if (!confirm('Delete this planned entry?')) return;
+  try {
+    await api(`/planned/${id}`, { method: 'DELETE' });
+    toast('Planned entry deleted');
+    closeModal();
+    route();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function editPlanned(id) {
+  const [e, products] = await Promise.all([getPlanned(id), api('/products')]);
+  if (!e) return toast('Planned entry not found', true);
+  openModal(`
+    <h2 class="modal-title tight">Edit planned entry</h2>
+    <div class="modal-sub">${esc(e.concept)}</div>
+    <form id="planned-form">
+      <div class="field">
+        <label>Product</label>
+        <select name="product_id">
+          <option value="">— no product assigned —</option>
+          ${products.map(p => `<option value="${p.id}" ${p.id === e.product_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Date</label><input name="planned_date" type="date" required value="${e.planned_date}"></div>
+      <div class="field"><label>Notes</label><input name="notes" value="${esc(e.notes || '')}"></div>
+      <button type="submit" class="btn-primary btn-big">Save</button>
+    </form>`);
+  $('#planned-form').onsubmit = async ev => {
+    ev.preventDefault();
+    const body = Object.fromEntries(new FormData(ev.target).entries());
+    try {
+      await api(`/planned/${id}`, { method: 'PUT', body });
+      closeModal();
+      toast('Planned entry updated');
+      route();
+    } catch (err) { toast(err.message, true); }
+  };
+}
+
+async function openDayPlan(dateStr) {
+  const entries = await api(`/planned?from=${dateStr}&to=${dateStr}`);
+  if (!entries.length) return;
+  openModal(`
+    <h2 class="modal-title tight">Planned</h2>
+    <div class="modal-sub">${fmtDate(dateStr)}</div>
+    <div class="dayplan">
+      ${entries.map(e => `
+        <div class="dayplan-row">
+          <div class="dp-main">
+            <div class="dp-name">${esc(e.concept)}${e.optional ? ' <span class="badge neutral">Optional</span>' : ''}</div>
+            <div class="dp-sub">${e.product_id ? esc(e.product_name) + (e.product_active ? '' : ' (archived)') : 'No product assigned'} · ${esc(e.zone_name)}</div>
+            ${e.notes ? `<div class="dp-note">${esc(e.notes)}</div>` : ''}
+          </div>
+          <div class="t-actions">
+            <button class="btn-mini btn-primary" onclick="logPlanned(${e.id})">Log</button>
+            <button class="btn-mini btn-ghost" onclick="editPlanned(${e.id})">Edit</button>
+            <button class="btn-mini btn-ghost" onclick="skipPlanned(${e.id})">Skip</button>
+            <button class="btn-mini btn-danger-o" onclick="deletePlanned(${e.id})" title="Delete">✕</button>
+          </div>
+        </div>`).join('')}
+    </div>`);
+}
+
+async function clearPresetPlan() {
+  if (!confirm('Remove all upcoming preset plan entries? Completed and skipped entries are kept.')) return;
+  try {
+    let deleted = 0;
+    for (const src of presetSources) {
+      const r = await api(`/plans/${src.replace('preset:', '')}/clear`, { method: 'POST', body: {} });
+      deleted += r.deleted;
+    }
+    toast(`Removed ${deleted} planned entr${deleted === 1 ? 'y' : 'ies'}`);
+    route();
+  } catch (err) { toast(err.message, true); }
+}
+
+// ---------- Apply-plan wizard ----------
+let wizState = null;
+
+function wizMonthsLabel(step) {
+  const slot = step.week === 1 ? 'early in the month' : 'mid-month';
+  if (step.months.length === 12) return `Every month · ${slot}`;
+  const names = [...step.months].sort((a, b) => a - b).map(m => MONTHS[m - 1]);
+  return `${names.join(', ')} · ${slot}`;
+}
+
+async function openApplyPlanWizard() {
+  const [plans, zones, products] = await Promise.all([api('/plans'), api('/zones'), api('/products')]);
+  if (!zones.length) return toast('Add a lawn zone first (Zones tab)', true);
+  const plan = plans[0];
+  const mapping = {};
+  for (const step of plan.steps) {
+    const ofType = products.filter(p => p.type_name === step.type);
+    const match = ofType.length === 1 ? ofType[0]
+      : ofType.length > 1
+        ? (step.matchHint && ofType.find(p => p.name.toLowerCase().includes(step.matchHint.toLowerCase()))) || null
+        : null;
+    mapping[step.key] = { include: !step.optional && !!match, product_id: match ? match.id : null };
+  }
+  wizState = { plan, zones, products, start_month: todayStr().slice(0, 7), zone_ids: zones.map(z => z.id), mapping };
+  wizSetup();
+}
+
+function wizSetup() {
+  const w = wizState;
+  openModal(`
+    <h2 class="modal-title tight">Apply a plan</h2>
+    <div class="modal-sub">Step 1 of 3 — plan &amp; zones</div>
+    <div class="wiz-plan-card">
+      <div class="wiz-plan-name">${esc(w.plan.name)}</div>
+      <div class="wiz-plan-desc">${esc(w.plan.description)}</div>
+    </div>
+    <div class="field"><label>Start month (schedules 12 months ahead)</label>
+      <input type="month" id="wiz-month" value="${w.start_month}"></div>
+    <div class="field"><label>Zones</label>
+      ${w.zones.map(z => `<label class="check"><input type="checkbox" class="wiz-zone" value="${z.id}"
+        ${w.zone_ids.includes(z.id) ? 'checked' : ''}> ${esc(z.name)} — ${fmtQty(z.area_m2)}m²</label>`).join('')}
+    </div>
+    <button class="btn-primary btn-big" id="wiz-next1">Next — match products</button>`);
+  $('#wiz-next1').onclick = () => {
+    w.start_month = $('#wiz-month').value || todayStr().slice(0, 7);
+    w.zone_ids = [...document.querySelectorAll('.wiz-zone:checked')].map(el => Number(el.value));
+    if (!w.zone_ids.length) return toast('Select at least one zone', true);
+    wizMapping();
+  };
+}
+
+function wizMapping() {
+  const w = wizState;
+  const rows = w.plan.steps.map(step => {
+    const m = w.mapping[step.key];
+    const noMatch = !m.product_id;
+    return `
+      <div class="wiz-step-row">
+        <label class="wiz-inc"><input type="checkbox" class="wiz-include" data-key="${step.key}" ${m.include ? 'checked' : ''}></label>
+        <div class="wiz-info">
+          <div class="wiz-name">${esc(step.label)}${step.optional ? ' <span class="badge neutral">Optional</span>' : ''}</div>
+          <div class="wiz-sub">${esc(wizMonthsLabel(step))}${step.note ? ' · ' + esc(step.note) : ''}</div>
+          ${noMatch && !step.optional ? `<div class="wiz-sub wiz-nomatch">No matching product — pick one, or leave as a reminder</div>` : ''}
+        </div>
+        <select class="wiz-product" data-key="${step.key}">
+          <option value="">Reminder only (no product)</option>
+          ${w.products.map(p => `<option value="${p.id}" ${p.id === m.product_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+        </select>
+      </div>`;
+  }).join('');
+  openModal(`
+    <h2 class="modal-title tight">Match your products</h2>
+    <div class="modal-sub">Step 2 of 3 — tick the steps you want; unticked steps are skipped</div>
+    <div class="wiz-steps">${rows}</div>
+    <div class="wiz-nav">
+      <button class="btn-ghost" id="wiz-back2">Back</button>
+      <button class="btn-primary" id="wiz-next2">Next — preview</button>
+    </div>`);
+  const readMapping = () => {
+    document.querySelectorAll('.wiz-include').forEach(el => { w.mapping[el.dataset.key].include = el.checked; });
+    document.querySelectorAll('.wiz-product').forEach(el => {
+      w.mapping[el.dataset.key].product_id = el.value ? Number(el.value) : null;
+    });
+  };
+  $('#wiz-back2').onclick = () => { readMapping(); wizSetup(); };
+  $('#wiz-next2').onclick = () => {
+    readMapping();
+    if (!Object.values(w.mapping).some(m => m.include)) return toast('Include at least one step', true);
+    wizPreview();
+  };
+}
+
+async function wizPreview() {
+  const w = wizState;
+  const body = { start_month: w.start_month, zone_ids: w.zone_ids, mapping: w.mapping };
+  let dry;
+  try { dry = await api(`/plans/${w.plan.id}/apply`, { method: 'POST', body: { ...body, dry_run: true } }); }
+  catch (err) { return toast(err.message, true); }
+  openModal(`
+    <h2 class="modal-title tight">Preview</h2>
+    <div class="modal-sub">Step 3 of 3 — confirm</div>
+    <div class="wiz-preview">
+      <div class="wiz-preview-num">${dry.count} planned entries</div>
+      <div class="wiz-sub">across ${w.zone_ids.length} zone${w.zone_ids.length === 1 ? '' : 's'}, ${fmtDate(dry.from)} → ${fmtDate(dry.to)}</div>
+      <div class="wiz-bystep">
+        ${Object.entries(dry.byStep).map(([label, n]) => `<div class="wiz-bystep-row"><span>${esc(label)}</span><span>${n}×</span></div>`).join('')}
+      </div>
+    </div>
+    <div class="wiz-replace hidden" id="wiz-replace">
+      <span id="wiz-replace-msg"></span>
+      <button class="btn-primary" id="wiz-apply-replace">Replace &amp; apply</button>
+    </div>
+    <div class="wiz-nav">
+      <button class="btn-ghost" id="wiz-back3">Back</button>
+      <button class="btn-primary" id="wiz-apply">Apply plan</button>
+    </div>`);
+  const apply = async replace => {
+    try {
+      const r = await api(`/plans/${w.plan.id}/apply`, { method: 'POST', body: { ...body, replace } });
+      closeModal();
+      toast(`Plan applied — ${r.created} entries scheduled${r.replaced ? ` (${r.replaced} replaced)` : ''}`);
+      if (location.hash === '#/calendar') route();
+      else location.hash = '#/calendar';
+    } catch (err) {
+      if (!replace && /upcoming entr/.test(err.message)) {
+        $('#wiz-replace-msg').textContent = err.message + '.';
+        $('#wiz-replace').classList.remove('hidden');
+        $('#wiz-apply').disabled = true;
+      } else {
+        toast(err.message, true);
+      }
+    }
+  };
+  $('#wiz-back3').onclick = () => wizMapping();
+  $('#wiz-apply').onclick = () => apply(false);
+  $('#wiz-apply-replace').onclick = () => apply(true);
+}
+
 // ---------- Log / edit application ----------
-async function openLogForm(productId, zoneId, existing) {
+// `planned` (optional): a planned_applications row being completed — prefills
+// the form and marks the row done on save.
+async function openLogForm(productId, zoneId, existing, planned) {
   const [products, zones] = await Promise.all([api('/products'), api('/zones')]);
   if (!zones.length) {
     toast('Add a lawn zone first (Zones tab)', true);
@@ -721,14 +994,17 @@ async function openLogForm(productId, zoneId, existing) {
   }
   const isEdit = !!existing;
   const sel = {
-    product_id: existing ? existing.product_id : (productId || products[0]?.id),
-    zone_id: existing ? existing.zone_id : (zoneId || zones[0]?.id),
-    date_applied: existing ? existing.date_applied : todayStr(),
-    notes: existing ? existing.notes : ''
+    product_id: existing ? existing.product_id : ((planned && planned.product_id) || productId || products[0]?.id),
+    zone_id: existing ? existing.zone_id : ((planned && planned.zone_id) || zoneId || zones[0]?.id),
+    date_applied: existing ? existing.date_applied : (planned ? planned.planned_date : todayStr()),
+    notes: existing ? existing.notes : ((planned && planned.notes) || '')
   };
+  const plannedArchived = planned && planned.product_id && !products.some(p => p.id === planned.product_id);
 
   openModal(`
-    <h2 class="modal-title">${isEdit ? 'Edit application' : 'Log application'}</h2>
+    <h2 class="modal-title${planned ? ' tight' : ''}">${isEdit ? 'Edit application' : 'Log application'}</h2>
+    ${planned ? `<div class="modal-sub">Completing planned: ${esc(planned.concept)}</div>` : ''}
+    ${plannedArchived ? `<div class="plan-warn">The planned product is archived — pick a replacement below.</div>` : ''}
     <form id="log-form">
       <div class="field">
         <label>Product</label>
@@ -795,6 +1071,7 @@ async function openLogForm(productId, zoneId, existing) {
   $('#log-form').onsubmit = async e => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.target).entries());
+    if (planned && !isEdit) body.planned_id = planned.id;
     try {
       if (isEdit) {
         await api(`/applications/${existing.id}`, { method: 'PUT', body });
@@ -804,7 +1081,7 @@ async function openLogForm(productId, zoneId, existing) {
         if (created.stock_shortfall > 0) {
           toast(`Logged — stock was short by ${fmtQty(created.stock_shortfall)}${created.stock_unit}, now empty`, true);
         } else {
-          toast('Application logged — stock updated');
+          toast(planned ? 'Application logged — planned entry completed' : 'Application logged — stock updated');
         }
       }
       closeModal();

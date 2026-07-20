@@ -55,6 +55,23 @@ CREATE TABLE IF NOT EXISTS applications (
 
 CREATE INDEX IF NOT EXISTS idx_applications_product ON applications(product_id, date_applied);
 CREATE INDEX IF NOT EXISTS idx_applications_zone ON applications(zone_id, date_applied);
+
+CREATE TABLE IF NOT EXISTS planned_applications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  zone_id INTEGER NOT NULL REFERENCES zones(id),
+  product_id INTEGER REFERENCES products(id),        -- NULL = "no product assigned" reminder
+  concept TEXT NOT NULL,                             -- display label, e.g. 'Kelp / seaweed biostimulant'
+  planned_date TEXT NOT NULL,                        -- YYYY-MM-DD
+  source TEXT NOT NULL DEFAULT 'manual',             -- 'preset:<plan id>' | 'manual'
+  optional INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','done','skipped')),
+  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_planned_date ON planned_applications(planned_date);
+CREATE INDEX IF NOT EXISTS idx_planned_zone ON planned_applications(zone_id, planned_date);
 `);
 
 // ---- Migrations for databases created before deducted_qty existed ----

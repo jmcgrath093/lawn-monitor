@@ -48,6 +48,9 @@
   --danger-border: #e7cccb;
   --amber-ink: #7a5a2a;
 
+  --st-plan: #6d55b5;
+  --st-plan-bg: #efeaf9;
+
   --cal-cell: #f7f9f5;
   --cal-applied: #eef7f0;
   --cal-muted: #c2c9bb;
@@ -98,6 +101,9 @@
   --man-bg: #2e2714;
   --danger-border: #57352c;
   --amber-ink: #d8a83f;
+
+  --st-plan: #a894dd;
+  --st-plan-bg: #262040;
 
   --cal-cell: #1a221a;
   --cal-applied: #1c2f21;
@@ -332,6 +338,15 @@ button { cursor: pointer; }
 .legend-row { display: flex; align-items: center; gap: 11px; font-size: 14px; color: var(--ink2); }
 .legend-mark { width: 16px; text-align: center; font-size: 15px; flex: none; }
 
+/* Planned-application ring marker */
+.mark-plan {
+  width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box;
+  border: 2px solid var(--st-plan); background: transparent;
+}
+.mark-plan.faint { opacity: .55; }
+.cal-cell.has-plan { cursor: pointer; }
+.cal-cell.has-plan:hover .cal-num { color: var(--st-plan); font-weight: 800; }
+
 /* ---------- Products ---------- */
 .prod-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -451,6 +466,61 @@ textarea { resize: vertical; }
 .type-add input { flex: 1; }
 .type-add button { padding: 0 20px; border: none; border-radius: 12px; background: var(--primary); color: #fff; font-weight: 700; font-size: 15px; }
 
+/* ---------- Planned entries: day modal + apply-plan wizard ---------- */
+.plan-warn {
+  background: var(--st-amber-bg); color: var(--st-amber);
+  border-radius: 10px; padding: 9px 12px; margin-bottom: 14px;
+  font-size: 13px; font-weight: 600;
+}
+.dayplan-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px 0; border-bottom: 1px solid var(--rowline);
+}
+.dayplan-row:last-child { border-bottom: none; }
+.dp-main { min-width: 0; }
+.dp-name { font-weight: 700; font-size: 14.5px; }
+.dp-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.dp-note { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+.dayplan-row .t-actions { flex: none; flex-wrap: wrap; justify-content: flex-end; }
+
+.wiz-plan-card {
+  background: var(--st-plan-bg); border-radius: 14px;
+  padding: 14px 16px; margin-bottom: 16px;
+}
+.wiz-plan-name { font-weight: 800; font-size: 15px; color: var(--st-plan); }
+.wiz-plan-desc { font-size: 13px; color: var(--ink2); margin-top: 4px; }
+.wiz-steps { margin-bottom: 4px; }
+.wiz-step-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 11px 0; border-bottom: 1px solid var(--rowline);
+}
+.wiz-step-row:last-child { border-bottom: none; }
+.wiz-inc { padding-top: 2px; flex: none; }
+.wiz-info { flex: 1; min-width: 0; }
+.wiz-name { font-weight: 700; font-size: 14px; }
+.wiz-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.wiz-nomatch { color: var(--st-amber); font-weight: 600; }
+.wiz-step-row select { max-width: 170px; flex: none; }
+.wiz-nav { display: flex; justify-content: space-between; gap: 10px; margin-top: 16px; }
+.wiz-nav button { min-height: 44px; padding: 0 22px; border-radius: 12px; font-size: 15px; font-weight: 700; }
+.wiz-preview {
+  background: var(--card); border: 1px solid var(--hairline); border-radius: 14px;
+  padding: 16px; margin-bottom: 4px;
+}
+.wiz-preview-num { font-size: 26px; font-weight: 800; color: var(--st-plan); }
+.wiz-bystep { margin-top: 12px; border-top: 1px solid var(--rowline); padding-top: 8px; }
+.wiz-bystep-row {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 13.5px; color: var(--ink2); padding: 3px 0;
+}
+.wiz-replace {
+  background: var(--st-amber-bg); color: var(--st-amber);
+  border-radius: 12px; padding: 12px 14px; margin-top: 14px;
+  font-size: 13.5px; font-weight: 600;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.wiz-replace button { min-height: 38px; padding: 0 14px; border-radius: 10px; font-weight: 700; flex: none; }
+
 /* ---------- Toasts ---------- */
 .toasts {
   position: fixed; right: 24px; bottom: 24px; z-index: 50;
@@ -552,6 +622,7 @@ textarea { resize: vertical; }
   .cal-marks { height: 6px; gap: 3px; }
   .mark-check { font-size: 9px; }
   .mark-dot { width: 6px; height: 6px; }
+  .mark-plan { width: 7px; height: 7px; border-width: 1.5px; }
   .legend { width: 100%; padding: 13px 15px; gap: 9px; border-radius: 16px; }
   .legend-row { font-size: 13px; }
 

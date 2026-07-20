@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
-const { buildSchedule } = require('./schedule');
+const { buildSchedule, todayStr } = require('./schedule');
+const { PLANS, resolveEntries } = require('./plans');
 
 const router = express.Router();
 
@@ -269,6 +270,7 @@ function restoreStock(app) {
 router.post('/applications', (req, res) => {
   const v = validateApplication(req.body, res);
   if (!v) return;
+  const plannedId = req.body.planned_id ? Number(req.body.planned_id) : null;
   const create = db.transaction(() => {
     const info = db.prepare(`
       INSERT INTO applications (product_id, zone_id, date_applied, calculated_qty, actual_qty, notes)
@@ -276,6 +278,10 @@ router.post('/applications', (req, res) => {
     `).run(v.row);
     const d = deductStock(v.row.product_id, usedQty(v.row));
     db.prepare('UPDATE applications SET deducted_qty = ? WHERE id = ?').run(d.deducted, info.lastInsertRowid);
+    if (plannedId) {
+      db.prepare(`UPDATE planned_applications SET status = 'done', application_id = ?
+                  WHERE id = ? AND status = 'planned'`).run(info.lastInsertRowid, plannedId);
+    }
     return { id: info.lastInsertRowid, ...d };
   });
   const r = create();
@@ -308,6 +314,9 @@ router.delete('/applications/:id', (req, res) => {
   if (!existing) return httpError(res, 404, 'Application not found');
   const remove = db.transaction(() => {
     restoreStock(existing);
+    // Deleting a log entry revives the planned entry it completed
+    db.prepare(`UPDATE planned_applications SET status = 'planned', application_id = NULL
+                WHERE application_id = ?`).run(existing.id);
     db.prepare('DELETE FROM applications WHERE id = ?').run(existing.id);
   });
   remove();
@@ -321,6 +330,164 @@ router.get('/calc', (req, res) => {
   if (!product || !zone) return httpError(res, 400, 'Unknown product or zone');
   const qty = product.rate_amount * (zone.area_m2 / product.rate_area_m2);
   res.json({ calculated_qty: qty, unit: product.rate_unit, dilution_note: product.dilution_note });
+});
+
+// ---------- Preset plans ----------
+router.get('/plans', (req, res) => {
+  res.json(PLANS);
+});
+
+// Apply a preset plan: generate planned_applications rows for the next
+// 12 months. dry_run previews counts without writing; replace clears this
+// plan's remaining future entries in the chosen zones first.
+router.post('/plans/:planId/apply', (req, res) => {
+  const plan = PLANS.find(p => p.id === req.params.planId);
+  if (!plan) return httpError(res, 404, 'Unknown plan');
+
+  const zoneIds = Array.isArray(req.body.zone_ids) ? req.body.zone_ids.map(Number) : [];
+  if (!zoneIds.length) return httpError(res, 400, 'At least one zone is required');
+  for (const id of zoneIds) {
+    if (!db.prepare('SELECT id FROM zones WHERE id = ?').get(id)) return httpError(res, 400, `Unknown zone ${id}`);
+  }
+
+  const mapping = req.body.mapping || {};
+  for (const [key, m] of Object.entries(mapping)) {
+    if (!plan.steps.some(s => s.key === key)) return httpError(res, 400, `Unknown plan step "${key}"`);
+    if (m && m.include && m.product_id != null &&
+        !db.prepare('SELECT id FROM products WHERE id = ?').get(m.product_id)) {
+      return httpError(res, 400, `Unknown product for step "${key}"`);
+    }
+  }
+
+  const today = todayStr();
+  let entries;
+  try {
+    entries = resolveEntries(plan, req.body.start_month, mapping, zoneIds, today);
+  } catch (e) {
+    return httpError(res, 400, e.message);
+  }
+  if (!entries.length) return httpError(res, 400, 'Nothing to schedule — no steps included');
+
+  if (req.body.dry_run) {
+    const byStep = {};
+    const dates = entries.map(e => e.planned_date).sort();
+    for (const e of entries) byStep[e.concept] = (byStep[e.concept] || 0) + 1;
+    return res.json({ count: entries.length, byStep, from: dates[0], to: dates[dates.length - 1] });
+  }
+
+  const zoneMarks = zoneIds.map(() => '?').join(',');
+  const existing = db.prepare(`
+    SELECT COUNT(*) AS n FROM planned_applications
+    WHERE source = ? AND status = 'planned' AND planned_date >= ? AND zone_id IN (${zoneMarks})
+  `).get('preset:' + plan.id, today, ...zoneIds).n;
+  if (existing > 0 && !req.body.replace) {
+    return res.status(409).json({ error: `This plan already has ${existing} upcoming entr${existing === 1 ? 'y' : 'ies'} in the selected zone(s)`, existing });
+  }
+
+  const apply = db.transaction(() => {
+    if (existing > 0) {
+      db.prepare(`
+        DELETE FROM planned_applications
+        WHERE source = ? AND status = 'planned' AND planned_date >= ? AND zone_id IN (${zoneMarks})
+      `).run('preset:' + plan.id, today, ...zoneIds);
+    }
+    const ins = db.prepare(`
+      INSERT INTO planned_applications (zone_id, product_id, concept, planned_date, source, optional, notes)
+      VALUES (@zone_id, @product_id, @concept, @planned_date, @source, @optional, @notes)
+    `);
+    for (const e of entries) ins.run(e);
+  });
+  apply();
+  res.status(201).json({ created: entries.length, replaced: existing });
+});
+
+// Remove a plan's remaining future entries (done/skipped/past rows are kept)
+router.post('/plans/:planId/clear', (req, res) => {
+  const plan = PLANS.find(p => p.id === req.params.planId);
+  if (!plan) return httpError(res, 404, 'Unknown plan');
+  const zoneIds = Array.isArray(req.body.zone_ids) ? req.body.zone_ids.map(Number) : null;
+  const zoneClause = zoneIds && zoneIds.length ? `AND zone_id IN (${zoneIds.map(() => '?').join(',')})` : '';
+  const info = db.prepare(`
+    DELETE FROM planned_applications
+    WHERE source = ? AND status = 'planned' AND planned_date >= ? ${zoneClause}
+  `).run('preset:' + plan.id, todayStr(), ...(zoneIds && zoneIds.length ? zoneIds : []));
+  res.json({ deleted: info.changes });
+});
+
+// ---------- Planned applications ----------
+router.get('/planned', (req, res) => {
+  const where = [];
+  const params = {};
+  if (req.query.from) { where.push('pl.planned_date >= @from'); params.from = req.query.from; }
+  if (req.query.to) { where.push('pl.planned_date <= @to'); params.to = req.query.to; }
+  if (req.query.zone_id) { where.push('pl.zone_id = @zone_id'); params.zone_id = req.query.zone_id; }
+  const status = req.query.status || 'planned';
+  if (status !== 'all') { where.push('pl.status = @status'); params.status = status; }
+  if (req.query.all !== '1') where.push('z.active = 1');
+  const rows = db.prepare(`
+    SELECT pl.*, p.name AS product_name, p.active AS product_active, z.name AS zone_name
+    FROM planned_applications pl
+    LEFT JOIN products p ON p.id = pl.product_id
+    JOIN zones z ON z.id = pl.zone_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY pl.planned_date, pl.id
+  `).all(params);
+  res.json(rows);
+});
+
+function validatePlanned(body, res) {
+  const zone = db.prepare('SELECT * FROM zones WHERE id = ?').get(body.zone_id);
+  if (!zone) { httpError(res, 400, 'Unknown zone'); return null; }
+  if (body.product_id != null && body.product_id !== '' &&
+      !db.prepare('SELECT id FROM products WHERE id = ?').get(body.product_id)) {
+    httpError(res, 400, 'Unknown product'); return null;
+  }
+  const concept = (body.concept || '').trim();
+  if (!concept) { httpError(res, 400, 'A description of the planned application is required'); return null; }
+  const date = String(body.planned_date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { httpError(res, 400, 'Date must be YYYY-MM-DD'); return null; }
+  return {
+    zone_id: zone.id,
+    product_id: body.product_id != null && body.product_id !== '' ? Number(body.product_id) : null,
+    concept,
+    planned_date: date,
+    optional: body.optional ? 1 : 0,
+    notes: body.notes ? String(body.notes).trim() : null
+  };
+}
+
+router.post('/planned', (req, res) => {
+  const v = validatePlanned(req.body, res);
+  if (!v) return;
+  const info = db.prepare(`
+    INSERT INTO planned_applications (zone_id, product_id, concept, planned_date, source, optional, notes)
+    VALUES (@zone_id, @product_id, @concept, @planned_date, 'manual', @optional, @notes)
+  `).run(v);
+  res.status(201).json(db.prepare('SELECT * FROM planned_applications WHERE id = ?').get(info.lastInsertRowid));
+});
+
+router.put('/planned/:id', (req, res) => {
+  const existing = db.prepare('SELECT * FROM planned_applications WHERE id = ?').get(req.params.id);
+  if (!existing) return httpError(res, 404, 'Planned application not found');
+  const v = validatePlanned({ ...existing, ...req.body }, res);
+  if (!v) return;
+  let status = existing.status;
+  if (req.body.status != null) {
+    if (!['planned', 'done', 'skipped'].includes(req.body.status)) return httpError(res, 400, 'Invalid status');
+    status = req.body.status;
+  }
+  db.prepare(`
+    UPDATE planned_applications SET zone_id = @zone_id, product_id = @product_id, concept = @concept,
+      planned_date = @planned_date, optional = @optional, notes = @notes, status = @status
+    WHERE id = @id
+  `).run({ ...v, status, id: existing.id });
+  res.json(db.prepare('SELECT * FROM planned_applications WHERE id = ?').get(existing.id));
+});
+
+router.delete('/planned/:id', (req, res) => {
+  const info = db.prepare('DELETE FROM planned_applications WHERE id = ?').run(req.params.id);
+  if (info.changes === 0) return httpError(res, 404, 'Planned application not found');
+  res.json({ ok: true });
 });
 
 // ---------- Schedule & dashboard ----------
